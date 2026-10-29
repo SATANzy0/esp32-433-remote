@@ -30,6 +30,7 @@ static uint16_t lastN = 0;
 static uint16_t refUs[MAX_ITEMS];
 static uint16_t refLen = 0;
 static uint8_t repeatCount = 0;
+static bool monitor = false;   // 诊断模式: 打印所有通过基础校验的帧(不过滤重复)
 
 void setup() {
   Serial.begin(115200);
@@ -133,23 +134,33 @@ void loop() {
       uint16_t n = rx_size / sizeof(rmt_item32_t);
       lastN = toUs(item, n, lastUs);          // 缓存供重放
       if (lastN > 4 && isValidFrame(lastUs, lastN)) {
-        // 连续3帧逐脉冲一致 => 真实遥控连发, 才打印; 随机噪声不匹配则跳过
-        if (pulseMatch(lastUs, lastN, refUs, refLen)) {
-          repeatCount++;
-        } else {
-          repeatCount = 1;
-          memcpy(refUs, lastUs, lastN * sizeof(uint16_t));
-          refLen = lastN;
-        }
-        if (repeatCount >= 3) {
-          Serial.print("raw:[");
+        if (monitor) {
+          // 诊断模式: 打印所有基础校验通过的帧, 判断是否收到遥控信号
+          Serial.print("M:[");
           for (uint16_t i = 0; i < lastN; i++) {
             Serial.print(lastUs[i]);
             if (i != lastN - 1) Serial.print(",");
           }
           Serial.println("]");
-          Serial.printf(">> 共 %d 个电平, 输入 1 重放\n", lastN);
-          repeatCount = 0;   // 避免刷屏, 重新计数
+        } else {
+          // 连续3帧逐脉冲一致 => 真实遥控连发, 才打印; 随机噪声不匹配则跳过
+          if (pulseMatch(lastUs, lastN, refUs, refLen)) {
+            repeatCount++;
+          } else {
+            repeatCount = 1;
+            memcpy(refUs, lastUs, lastN * sizeof(uint16_t));
+            refLen = lastN;
+          }
+          if (repeatCount >= 3) {
+            Serial.print("raw:[");
+            for (uint16_t i = 0; i < lastN; i++) {
+              Serial.print(lastUs[i]);
+              if (i != lastN - 1) Serial.print(",");
+            }
+            Serial.println("]");
+            Serial.printf(">> 共 %d 个电平, 输入 1 重放\n", lastN);
+            repeatCount = 0;   // 避免刷屏, 重新计数
+          }
         }
       }
     }
@@ -181,6 +192,9 @@ void loop() {
       };
       sendUs((uint16_t*)tw, 40);
       Serial.println("发射完成, 若 SYN480R 收到会在上面打印 raw");
+    } else if (c == 'm') {
+      monitor = !monitor;
+      Serial.printf("诊断模式 %s (打印所有基础校验通过的帧)\n", monitor ? "ON" : "OFF");
     }
   }
 
