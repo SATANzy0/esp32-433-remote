@@ -94,17 +94,12 @@ static void sendUs(uint16_t* tim, uint16_t n) {
 }
 
 // 判断是否为"看起来像真实遥控"的帧, 用于过滤 SYN480 空闲底噪
-// 规则: 电平数合理 + 帧总时长合理 + 过短的脉冲不过多
+// 当前为宽松调试版: 只挡明显噪声, 保证真实信号能抓到
 static bool isValidFrame(uint16_t* tim, uint16_t n) {
-  if (n < 16 || n > 200) return false;          // 真实遥控一般 24~50 个电平
+  if (n < 8 || n > 300) return false;          // 电平数范围放宽
   uint32_t total = 0;
-  uint16_t shortCnt = 0;
-  for (uint16_t i = 0; i < n; i++) {
-    total += tim[i];
-    if (tim[i] < 150) shortCnt++;               // 统计过短(<150us)的脉冲
-  }
-  if (total < 3000 || total > 60000) return false;   // 帧时长 3ms~60ms
-  if (shortCnt > n / 3) return false;           // 太多短脉冲 => 噪声
+  for (uint16_t i = 0; i < n; i++) total += tim[i];
+  if (total < 1000 || total > 100000) return false;   // 帧时长 1ms~100ms
   return true;
 }
 
