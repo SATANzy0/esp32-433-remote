@@ -1,0 +1,43 @@
+name: Build ESP32 433 firmware
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build firmware
+        run: pio run
+
+      - name: Merge into single flashable bin
+        run: |
+          pip install esptool
+          BOOTAPP=$(find ~/.platformio -name boot_app0.bin | head -1)
+          echo "boot_app0 = $BOOTAPP"
+          python -m esptool --chip esp32 merge_bin \
+            -o merged.bin \
+            --flash_mode dio --flash_size 4MB --flash_freq 80m \
+            0x1000  .pio/build/esp32dev/bootloader.bin \
+            0x8000  .pio/build/esp32dev/partitions.bin \
+            0xe000  "$BOOTAPP" \
+            0x10000 .pio/build/esp32dev/firmware.bin
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-433-firmware
+          path: merged.bin
