@@ -38,7 +38,7 @@ void setup() {
   rx_cfg.clk_div = 80;                       // 80MHz/80 = 1MHz -> 1 tick = 1us
   rx_cfg.mem_block_num = 2;
   rx_cfg.rx_config.filter_en = true;         // 过滤掉短噪声脉冲
-  rx_cfg.rx_config.filter_ticks_thresh = 30; // <30us 的毛刺丢弃
+  rx_cfg.rx_config.filter_ticks_thresh = 100; // <100us 的毛刺丢弃(SYN480底噪很强)
   rx_cfg.rx_config.idle_threshold = 2000;    // 2ms 空闲视为一帧结束
   ESP_ERROR_CHECK(rmt_config(&rx_cfg));
   ESP_ERROR_CHECK(rmt_driver_install(RMT_RX_CH, 4096, 0));  // 开 ring buffer
@@ -93,6 +93,21 @@ static void sendUs(uint16_t* tim, uint16_t n) {
   }
 }
 
+// 判断是否为"看起来像真实遥控"的帧, 用于过滤 SYN480 空闲底噪
+// 规则: 电平数合理 + 帧总时长合理 + 过短的脉冲不过多
+static bool isValidFrame(uint16_t* tim, uint16_t n) {
+  if (n < 16 || n > 200) return false;          // 真实遥控一般 24~50 个电平
+  uint32_t total = 0;
+  uint16_t shortCnt = 0;
+  for (uint16_t i = 0; i < n; i++) {
+    total += tim[i];
+    if (tim[i] < 150) shortCnt++;               // 统计过短(<150us)的脉冲
+  }
+  if (total < 3000 || total > 60000) return false;   // 帧时长 3ms~60ms
+  if (shortCnt > n / 3) return false;           // 太多短脉冲 => 噪声
+  return true;
+}
+
 void loop() {
   // 从 ring buffer 取一帧接收数据
   size_t rx_size = 0;
@@ -101,7 +116,7 @@ void loop() {
     if (rx_size >= sizeof(rmt_item32_t)) {
       uint16_t n = rx_size / sizeof(rmt_item32_t);
       lastN = toUs(item, n, lastUs);          // 缓存供重放
-      if (lastN > 4) {
+      if (lastN > 4 && isValidFrame(lastUs, lastN)) {
         Serial.print("raw:[");
         for (uint16_t i = 0; i < lastN; i++) {
           Serial.print(lastUs[i]);
