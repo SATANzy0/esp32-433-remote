@@ -1,5 +1,5 @@
 /*
- * ESP32-D0WD 433MHz ASK/OOK 抓码 + 重放 (PlatformIO 版)
+ * ESP32-D0WD 433MHz ASK/OOK 抓码 + 重放 (PlatformIO 版, IDF4.x ringbuffer API)
  * 硬件:
  *   SYN480R DATA -> GPIO16 (接收)
  *   SYN115F DATA -> GPIO17 (发射, VCC 必须 3.3V!)
@@ -11,6 +11,7 @@
  */
 #include <Arduino.h>
 #include "driver/rmt.h"
+#include "freertos/ringbuf.h"
 
 #define RX_PIN       16
 #define TX_PIN       17
@@ -19,33 +20,15 @@
 #define MAX_ITEMS    256
 #define REPEAT_TX    8
 
-static rmt_item32_t rx_items[MAX_ITEMS];
-static uint16_t rx_len = 0;
-static volatile bool got_data = false;
-static xSemaphoreHandle rx_sem = NULL;
-static intr_handle_t rmt_intr_handle = NULL;
+static RingbufHandle_t rx_rb = NULL;
 
 // 最近一次抓到的波形(us), 供重放
 static uint16_t lastUs[MAX_ITEMS];
 static uint16_t lastN = 0;
 
-// 接收完成中断
-void IRAM_ATTR rmt_rx_isr(void* arg) {
-  portBASE_TYPE taskAwoken = pdFALSE;
-  rmt_rx_start(RMT_RX_CH, false);          // 停接收
-  RMT.int_st.val = 0;                       // 清中断标志
-  if (rmt_get_items(RMT_RX_CH, rx_items, MAX_ITEMS, &rx_len) == ESP_OK) {
-    got_data = true;
-  }
-  rmt_rx_start(RMT_RX_CH, true);           // 重新开启接收
-  xSemaphoreGiveFromISR(rx_sem, &taskAwoken);
-  if (taskAwoken == pdTRUE) portYIELD_FROM_ISR();
-}
-
 void setup() {
   Serial.begin(115200);
   delay(200);
-  rx_sem = xSemaphoreCreateBinary();
 
   // ---- RMT 接收 (SYN480R) ----
   rmt_config_t rx_cfg = {};
@@ -58,9 +41,8 @@ void setup() {
   rx_cfg.rx_config.filter_ticks_thresh = 30; // <30us 的毛刺丢弃
   rx_cfg.rx_config.idle_threshold = 2000;    // 2ms 空闲视为一帧结束
   ESP_ERROR_CHECK(rmt_config(&rx_cfg));
-  ESP_ERROR_CHECK(rmt_driver_install(RMT_RX_CH, 4096, 0));
-  ESP_ERROR_CHECK(rmt_set_rx_intr_en(RMT_RX_CH, true));
-  ESP_ERROR_CHECK(rmt_isr_register(rmt_rx_isr, NULL, 0, &rmt_intr_handle));
+  ESP_ERROR_CHECK(rmt_driver_install(RMT_RX_CH, 4096, 0));  // 开 ring buffer
+  ESP_ERROR_CHECK(rmt_get_ringbuf_handle(RMT_RX_CH, &rx_rb));
   rmt_rx_start(RMT_RX_CH, true);
 
   // ---- RMT 发送 (SYN115F) ----
@@ -98,7 +80,7 @@ static uint16_t toUs(rmt_item32_t* items, uint16_t len, uint16_t* out) {
 // 用 us 数组发送(电平交替, 偶数下标为高)
 static void sendUs(uint16_t* tim, uint16_t n) {
   if (n == 0 || n > MAX_ITEMS) return;
-  rmt_item32_t items[n];
+  static rmt_item32_t items[MAX_ITEMS];
   for (uint16_t i = 0; i < n; i++) {
     items[i].duration0 = tim[i];
     items[i].level0 = (i % 2 == 0) ? 1 : 0;  // 交替高低
@@ -112,10 +94,13 @@ static void sendUs(uint16_t* tim, uint16_t n) {
 }
 
 void loop() {
-  if (got_data) {
-    got_data = false;
-    if (rx_len > 4) {
-      lastN = toUs(rx_items, rx_len, lastUs);  // 缓存供重放
+  // 从 ring buffer 取一帧接收数据
+  size_t rx_size = 0;
+  rmt_item32_t* item = (rmt_item32_t*)xRingbufferReceive(rx_rb, &rx_size, pdMS_TO_TICKS(5));
+  if (item) {
+    if (rx_size >= sizeof(rmt_item32_t)) {
+      uint16_t n = rx_size / sizeof(rmt_item32_t);
+      lastN = toUs(item, n, lastUs);          // 缓存供重放
       if (lastN > 4) {
         Serial.print("raw:[");
         for (uint16_t i = 0; i < lastN; i++) {
@@ -126,9 +111,10 @@ void loop() {
         Serial.printf(">> 共 %d 个电平, 输入 1 重放\n", lastN);
       }
     }
-    rx_len = 0;
+    vRingbufferReturnItem(rx_rb, item);
   }
 
+  // 串口命令
   if (Serial.available()) {
     char c = Serial.read();
     if (c == '1') {
@@ -145,5 +131,5 @@ void loop() {
     }
   }
 
-  delay(5);
+  delay(2);
 }
