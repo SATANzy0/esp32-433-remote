@@ -26,6 +26,11 @@ static RingbufHandle_t rx_rb = NULL;
 static uint16_t lastUs[MAX_ITEMS];
 static uint16_t lastN = 0;
 
+// 上一帧"候选"波形(用于重复一致性判断: 真实遥控会连发多帧相同波形)
+static uint16_t candUs[MAX_ITEMS];
+static uint16_t candLen = 0;
+static uint32_t candTotal = 0;
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -107,6 +112,18 @@ static bool isValidFrame(uint16_t* tim, uint16_t n) {
   return true;
 }
 
+// 重复一致性判断: 真实遥控按下会连发多帧几乎相同的波形, 噪声则随机变化
+// 新帧与上一候选帧"电平数接近 && 总时长接近"才认为是遥控重复发射
+static bool isRepeatFrame(uint16_t* tim, uint16_t n) {
+  if (candLen == 0 || candTotal == 0) return false;
+  if (abs((int)n - (int)candLen) > 2) return false;      // 电平数差太多 => 不同
+  uint32_t total = 0;
+  for (uint16_t i = 0; i < n; i++) total += tim[i];
+  uint32_t diff = total > candTotal ? total - candTotal : candTotal - total;
+  if (diff > candTotal / 5) return false;                // 总时长差 >20% => 不同
+  return true;
+}
+
 void loop() {
   // 从 ring buffer 取一帧接收数据
   size_t rx_size = 0;
@@ -116,13 +133,22 @@ void loop() {
       uint16_t n = rx_size / sizeof(rmt_item32_t);
       lastN = toUs(item, n, lastUs);          // 缓存供重放
       if (lastN > 4 && isValidFrame(lastUs, lastN)) {
-        Serial.print("raw:[");
-        for (uint16_t i = 0; i < lastN; i++) {
-          Serial.print(lastUs[i]);
-          if (i != lastN - 1) Serial.print(",");
+        // 只有与上一帧"重复"(遥控连发)才打印, 随机噪声不打印
+        if (isRepeatFrame(lastUs, lastN)) {
+          Serial.print("raw:[");
+          for (uint16_t i = 0; i < lastN; i++) {
+            Serial.print(lastUs[i]);
+            if (i != lastN - 1) Serial.print(",");
+          }
+          Serial.println("]");
+          Serial.printf(">> 共 %d 个电平, 输入 1 重放\n", lastN);
         }
-        Serial.println("]");
-        Serial.printf(">> 共 %d 个电平, 输入 1 重放\n", lastN);
+        // 更新候选帧
+        memcpy(candUs, lastUs, lastN * sizeof(uint16_t));
+        candLen = lastN;
+        uint32_t t = 0;
+        for (uint16_t i = 0; i < lastN; i++) t += lastUs[i];
+        candTotal = t;
       }
     }
     vRingbufferReturnItem(rx_rb, item);
