@@ -26,10 +26,10 @@ static RingbufHandle_t rx_rb = NULL;
 static uint16_t lastUs[MAX_ITEMS];
 static uint16_t lastN = 0;
 
-// 上一帧"候选"波形(用于重复一致性判断: 真实遥控会连发多帧相同波形)
-static uint16_t candUs[MAX_ITEMS];
-static uint16_t candLen = 0;
-static uint32_t candTotal = 0;
+// 连续帧一致性: 真实遥控连发多帧几乎相同, 需连续3帧逐脉冲匹配才打印
+static uint16_t refUs[MAX_ITEMS];
+static uint16_t refLen = 0;
+static uint8_t repeatCount = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -112,15 +112,15 @@ static bool isValidFrame(uint16_t* tim, uint16_t n) {
   return true;
 }
 
-// 重复一致性判断: 真实遥控按下会连发多帧几乎相同的波形, 噪声则随机变化
-// 新帧与上一候选帧"电平数接近 && 总时长接近"才认为是遥控重复发射
-static bool isRepeatFrame(uint16_t* tim, uint16_t n) {
-  if (candLen == 0 || candTotal == 0) return false;
-  if (abs((int)n - (int)candLen) > 2) return false;      // 电平数差太多 => 不同
-  uint32_t total = 0;
-  for (uint16_t i = 0; i < n; i++) total += tim[i];
-  uint32_t diff = total > candTotal ? total - candTotal : candTotal - total;
-  if (diff > candTotal / 5) return false;                // 总时长差 >20% => 不同
+// 逐脉冲相似: 两帧电平数接近且每个脉冲宽度几乎一致, 才认为是同一码的重复发射
+// (噪声每帧脉冲随机, 逐脉冲几乎不可能匹配; 遥控重复帧脉冲宽度高度一致)
+static bool pulseMatch(uint16_t* a, uint16_t n, uint16_t* b, uint16_t m) {
+  if (abs((int)n - (int)m) > 1) return false;          // 电平数差太多 => 不同
+  int c = n < m ? n : m;
+  for (int i = 0; i < c; i++) {
+    uint32_t d = a[i] > b[i] ? a[i] - b[i] : b[i] - a[i];
+    if (d > a[i] / 4 + 40) return false;               // 单脉冲差 >25%+40us => 不同
+  }
   return true;
 }
 
@@ -133,8 +133,15 @@ void loop() {
       uint16_t n = rx_size / sizeof(rmt_item32_t);
       lastN = toUs(item, n, lastUs);          // 缓存供重放
       if (lastN > 4 && isValidFrame(lastUs, lastN)) {
-        // 只有与上一帧"重复"(遥控连发)才打印, 随机噪声不打印
-        if (isRepeatFrame(lastUs, lastN)) {
+        // 连续3帧逐脉冲一致 => 真实遥控连发, 才打印; 随机噪声不匹配则跳过
+        if (pulseMatch(lastUs, lastN, refUs, refLen)) {
+          repeatCount++;
+        } else {
+          repeatCount = 1;
+          memcpy(refUs, lastUs, lastN * sizeof(uint16_t));
+          refLen = lastN;
+        }
+        if (repeatCount >= 3) {
           Serial.print("raw:[");
           for (uint16_t i = 0; i < lastN; i++) {
             Serial.print(lastUs[i]);
@@ -142,13 +149,8 @@ void loop() {
           }
           Serial.println("]");
           Serial.printf(">> 共 %d 个电平, 输入 1 重放\n", lastN);
+          repeatCount = 0;   // 避免刷屏, 重新计数
         }
-        // 更新候选帧
-        memcpy(candUs, lastUs, lastN * sizeof(uint16_t));
-        candLen = lastN;
-        uint32_t t = 0;
-        for (uint16_t i = 0; i < lastN; i++) t += lastUs[i];
-        candTotal = t;
       }
     }
     vRingbufferReturnItem(rx_rb, item);
