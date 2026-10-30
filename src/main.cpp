@@ -133,16 +133,16 @@ void loop() {
     if (rx_size >= sizeof(rmt_item32_t)) {
       uint16_t n = rx_size / sizeof(rmt_item32_t);
       lastN = toUs(item, n, lastUs);          // 缓存供重放
-      if (lastN > 4 && isValidFrame(lastUs, lastN)) {
+      if (lastN > 4) {
         if (monitor) {
-          // 诊断模式: 打印所有基础校验通过的帧, 判断是否收到遥控信号
-          Serial.print("M:[");
+          // 诊断模式: 打印所有原始帧(完全不过滤), 确认 SYN480R 到底收到什么
+          Serial.print("ALL:[");
           for (uint16_t i = 0; i < lastN; i++) {
             Serial.print(lastUs[i]);
             if (i != lastN - 1) Serial.print(",");
           }
           Serial.println("]");
-        } else {
+        } else if (isValidFrame(lastUs, lastN)) {
           // 连续3帧逐脉冲一致 => 真实遥控连发, 才打印; 随机噪声不匹配则跳过
           if (pulseMatch(lastUs, lastN, refUs, refLen)) {
             repeatCount++;
