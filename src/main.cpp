@@ -135,13 +135,15 @@ void loop() {
       lastN = toUs(item, n, lastUs);          // 缓存供重放
       if (lastN > 4) {
         if (monitor) {
-          // 诊断模式: 打印所有原始帧(完全不过滤), 确认 SYN480R 到底收到什么
-          Serial.print("ALL:[");
-          for (uint16_t i = 0; i < lastN; i++) {
-            Serial.print(lastUs[i]);
-            if (i != lastN - 1) Serial.print(",");
+          // 诊断模式: 只打印长帧(>=20电平), 跳过短噪声碎片, 看清遥控器真实码
+          if (lastN >= 20) {
+            Serial.print("ALL:[");
+            for (uint16_t i = 0; i < lastN; i++) {
+              Serial.print(lastUs[i]);
+              if (i != lastN - 1) Serial.print(",");
+            }
+            Serial.println("]");
           }
-          Serial.println("]");
         } else if (isValidFrame(lastUs, lastN)) {
           // 连续3帧逐脉冲一致 => 真实遥控连发, 才打印; 随机噪声不匹配则跳过
           if (pulseMatch(lastUs, lastN, refUs, refLen)) {
