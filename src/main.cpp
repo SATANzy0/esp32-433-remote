@@ -12,6 +12,7 @@
 #include <Arduino.h>
 #include "driver/rmt.h"
 #include "freertos/ringbuf.h"
+#include <WiFi.h>
 
 #define RX_PIN       16
 #define TX_PIN       17
@@ -19,6 +20,12 @@
 #define RMT_TX_CH    RMT_CHANNEL_0
 #define MAX_ITEMS    256
 #define REPEAT_TX    8
+
+// WiFi 配置
+const char* WIFI_SSID = "xiaoyu-5G";
+const char* WIFI_PASS = "xiaoyu19870813";
+WiFiServer telnetServer(23);
+WiFiClient telnetClient;
 
 static RingbufHandle_t rx_rb = NULL;
 
@@ -38,11 +45,40 @@ static uint32_t longPulseCount = 0; // 含长脉冲(>2000us)的帧数
 static uint16_t maxFrameLen = 0;   // 最长帧的电平数
 static uint32_t maxPulseUs = 0;    // 最长脉冲的时长
 
+// 输出同时发到串口和 WiFi
+void printOut(const char* s) {
+  Serial.print(s);
+  if (telnetClient && telnetClient.connected()) telnetClient.print(s);
+}
+void printlnOut(const char* s) {
+  Serial.println(s);
+  if (telnetClient && telnetClient.connected()) telnetClient.println(s);
+}
+void printfOut(const char* fmt, ...) {
+  char buf[256];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  printOut(buf);
+}
+
 void setup() {
   Serial.begin(115200);
   delay(200);
 
-  // ---- RMT 接收 (SYN480R) ----
+  // ---- WiFi 连接 ----
+  Serial.printf("连接 WiFi: %s ...\n", WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.printf("\nWiFi 已连接! IP: %s\n", WiFi.localIP().toString().c_str());
+  telnetServer.begin();
+  Serial.printf("Telnet 服务器已启动: %s:23\n", WiFi.localIP().toString().c_str());
+
+  // ---- RMT 接收 (ZX-011) ----
   rmt_config_t rx_cfg = {};
   rx_cfg.rmt_mode = RMT_MODE_RX;
   rx_cfg.channel = RMT_RX_CH;
@@ -133,6 +169,21 @@ static bool pulseMatch(uint16_t* a, uint16_t n, uint16_t* b, uint16_t m) {
 }
 
 void loop() {
+  // 检查 WiFi 客户端连接
+  if (telnetServer.hasClient()) {
+    if (telnetClient && telnetClient.connected()) {
+      telnetServer.available().stop();  // 拒绝新连接, 保持旧连接
+    } else {
+      telnetClient = telnetServer.available();
+      printlnOut("WiFi 客户端已连接!");
+    }
+  }
+  // 检查 WiFi 客户端是否断开
+  if (telnetClient && !telnetClient.connected()) {
+    telnetClient.stop();
+    printlnOut("WiFi 客户端已断开");
+  }
+
   // 从 ring buffer 取一帧接收数据
   size_t rx_size = 0;
   rmt_item32_t* item = (rmt_item32_t*)xRingbufferReceive(rx_rb, &rx_size, pdMS_TO_TICKS(5));
@@ -166,12 +217,12 @@ void loop() {
             refLen = lastN;
           }
           if (repeatCount >= 2) {
-            Serial.printf("PRE[%d]:[", repeatCount);
+            printfOut("PRE[%d]:[", repeatCount);
             for (uint16_t i = 0; i < lastN; i++) {
-              Serial.print(lastUs[i]);
-              if (i != lastN - 1) Serial.print(",");
+              printfOut("%d", lastUs[i]);
+              if (i != lastN - 1) printfOut(",");
             }
-            Serial.println("]");
+            printlnOut("]");
           }
         }
         
@@ -187,12 +238,12 @@ void loop() {
             }
             // 只打印重复 >=2 次的帧, 标注重复次数
             if (repeatCount >= 2) {
-              Serial.printf("REP[%d]:[", repeatCount);
+              printfOut("REP[%d]:[", repeatCount);
               for (uint16_t i = 0; i < lastN; i++) {
-                Serial.print(lastUs[i]);
-                if (i != lastN - 1) Serial.print(",");
+                printfOut("%d", lastUs[i]);
+                if (i != lastN - 1) printfOut(",");
               }
-              Serial.println("]");
+              printlnOut("]");
             }
           }
         } else if (!prefixMode && isValidFrame(lastUs, lastN)) {
@@ -205,12 +256,12 @@ void loop() {
             refLen = lastN;
           }
           if (repeatCount >= 3) {
-            Serial.print("raw:[");
+            printOut("raw:[");
             for (uint16_t i = 0; i < lastN; i++) {
-              Serial.print(lastUs[i]);
-              if (i != lastN - 1) Serial.print(",");
+              printfOut("%d", lastUs[i]);
+              if (i != lastN - 1) printfOut(",");
             }
-            Serial.println("]");
+            printlnOut("]");
             Serial.printf(">> 共 %d 个电平, 输入 1 重放\n", lastN);
             repeatCount = 0;   // 避免刷屏, 重新计数
           }
@@ -225,18 +276,17 @@ void loop() {
     char c = Serial.read();
     if (c == '1') {
       if (lastN == 0) {
-        Serial.println("缓存为空, 先按一下遥控器抓码");
+        printlnOut("缓存为空, 先按一下遥控器抓码");
       } else {
-        Serial.printf("重放 %d 个电平 x%d ...\n", lastN, REPEAT_TX);
+        printfOut("重放 %d 个电平 x%d ...\n", lastN, REPEAT_TX);
         sendUs(lastUs, lastN);
-        Serial.println("发送完成");
+        printlnOut("发送完成");
       }
     } else if (c == 'r') {
       lastN = 0;
-      Serial.println("缓存已清空");
+      printlnOut("缓存已清空");
     } else if (c == 't') {
-      // 环回自测: SYN115F 发射一段 433 测试波形, SYN480R 应收到并打印 raw
-      Serial.println("环回测试: SYN115F 发射 433 测试波形 x8...");
+      printlnOut("环回测试: SYN115F 发射 433 测试波形 x8...");
       static const uint16_t tw[40] = {
         300,900,300,900,300,900,300,900,300,900,
         300,900,300,900,300,900,300,900,300,900,
@@ -244,18 +294,18 @@ void loop() {
         300,900,300,900,300,900,300,900,300,900
       };
       sendUs((uint16_t*)tw, 40);
-      Serial.println("发射完成, 若 SYN480R 收到会在上面打印 raw");
+      printlnOut("发射完成, 若 ZX-011 收到会在上面打印 raw");
     } else if (c == 'm') {
       monitor = !monitor;
       repeatCount = 0;
       refLen = 0;
-      Serial.printf("诊断模式 %s (只打印连续重复的帧)\n", monitor ? "ON" : "OFF");
+      printfOut("诊断模式 %s (只打印连续重复的帧)\n", monitor ? "ON" : "OFF");
     } else if (c == 'p') {
       prefixMode = !prefixMode;
-      Serial.printf("前导码模式 %s (打印所有含长脉冲>2000us的帧)\n", prefixMode ? "ON" : "OFF");
+      printfOut("前导码模式 %s (只打印连续重复的含长脉冲的帧)\n", prefixMode ? "ON" : "OFF");
     } else if (c == 's') {
       statsMode = !statsMode;
-      Serial.printf("统计模式 %s (每秒打印一次)\n", statsMode ? "ON" : "OFF");
+      printfOut("统计模式 %s (每秒打印一次)\n", statsMode ? "ON" : "OFF");
     }
   }
 
@@ -263,7 +313,7 @@ void loop() {
   static uint32_t lastStatsTime = 0;
   if (statsMode && millis() - lastStatsTime > 1000) {
     lastStatsTime = millis();
-    Serial.printf("STAT: frames=%d, longPulse=%d, maxFrameLen=%d, maxPulse=%dus\n",
+    printfOut("STAT: frames=%d, longPulse=%d, maxFrameLen=%d, maxPulse=%dus\n",
                   frameCount, longPulseCount, maxFrameLen, maxPulseUs);
     frameCount = 0;
     longPulseCount = 0;
