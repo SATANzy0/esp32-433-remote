@@ -155,14 +155,23 @@ void loop() {
         }
         if (hasLongPulse) longPulseCount++;
         
-        // 前导码模式: 打印所有含长脉冲(>2000us)的帧
+        // 前导码模式: 只打印连续重复的含长脉冲的帧(自动过滤随机噪声)
         if (prefixMode && hasLongPulse) {
-          Serial.printf("PRE:[", lastN);
-          for (uint16_t i = 0; i < lastN; i++) {
-            Serial.print(lastUs[i]);
-            if (i != lastN - 1) Serial.print(",");
+          if (pulseMatch(lastUs, lastN, refUs, refLen)) {
+            repeatCount++;
+          } else {
+            repeatCount = 1;
+            memcpy(refUs, lastUs, lastN * sizeof(uint16_t));
+            refLen = lastN;
           }
-          Serial.println("]");
+          if (repeatCount >= 2) {
+            Serial.printf("PRE[%d]:[", repeatCount);
+            for (uint16_t i = 0; i < lastN; i++) {
+              Serial.print(lastUs[i]);
+              if (i != lastN - 1) Serial.print(",");
+            }
+            Serial.println("]");
+          }
         }
         
         if (monitor) {
