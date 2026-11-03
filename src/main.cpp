@@ -50,8 +50,8 @@ void setup() {
   rx_cfg.clk_div = 80;                       // 80MHz/80 = 1MHz -> 1 tick = 1us
   rx_cfg.mem_block_num = 2;
   rx_cfg.rx_config.filter_en = true;         // 过滤掉短噪声脉冲
-  rx_cfg.rx_config.filter_ticks_thresh = 30; // 30us: 滤掉毛刺
-  rx_cfg.rx_config.idle_threshold = 10000;   // 10ms 空闲才认为一帧结束(原来2ms会截断遥控器长前导码)
+  rx_cfg.rx_config.filter_ticks_thresh = 100; // 100us: 滤掉更多短脉冲噪声(ZX-011底噪强)
+  rx_cfg.rx_config.idle_threshold = 10000;   // 10ms 空闲才认为一帧结束
   ESP_ERROR_CHECK(rmt_config(&rx_cfg));
   ESP_ERROR_CHECK(rmt_driver_install(RMT_RX_CH, 4096, 0));  // 开 ring buffer
   ESP_ERROR_CHECK(rmt_get_ringbuf_handle(RMT_RX_CH, &rx_rb));
@@ -122,13 +122,14 @@ static bool isValidFrame(uint16_t* tim, uint16_t n) {
 // 逐脉冲相似: 两帧电平数接近且每个脉冲宽度几乎一致, 才认为是同一码的重复发射
 // (噪声每帧脉冲随机, 逐脉冲几乎不可能匹配; 遥控重复帧脉冲宽度高度一致)
 static bool pulseMatch(uint16_t* a, uint16_t n, uint16_t* b, uint16_t m) {
-  if (abs((int)n - (int)m) > 1) return false;          // 电平数差太多 => 不同
+  if (abs((int)n - (int)m) > 2) return false;          // 电平数差太多 => 不同(放宽到2)
   int c = n < m ? n : m;
+  int matchCount = 0;
   for (int i = 0; i < c; i++) {
     uint32_t d = a[i] > b[i] ? a[i] - b[i] : b[i] - a[i];
-    if (d > a[i] / 4 + 40) return false;               // 单脉冲差 >25%+40us => 不同
+    if (d <= a[i] / 2 + 100) matchCount++;             // 单脉冲差 <=50%+100us => 匹配(放宽)
   }
-  return true;
+  return matchCount >= c * 0.7;                         // 70%以上脉冲匹配 => 认为是同一码
 }
 
 void loop() {
