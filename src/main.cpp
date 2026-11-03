@@ -50,8 +50,8 @@ void setup() {
   rx_cfg.clk_div = 80;                       // 80MHz/80 = 1MHz -> 1 tick = 1us
   rx_cfg.mem_block_num = 2;
   rx_cfg.rx_config.filter_en = true;         // 过滤掉短噪声脉冲
-  rx_cfg.rx_config.filter_ticks_thresh = 30; // 30us: 滤掉毛刺, 但不误伤遥控器的短脉冲(SYN480底噪强)
-  rx_cfg.rx_config.idle_threshold = 2000;    // 2ms 空闲视为一帧结束
+  rx_cfg.rx_config.filter_ticks_thresh = 30; // 30us: 滤掉毛刺
+  rx_cfg.rx_config.idle_threshold = 10000;   // 10ms 空闲才认为一帧结束(原来2ms会截断遥控器长前导码)
   ESP_ERROR_CHECK(rmt_config(&rx_cfg));
   ESP_ERROR_CHECK(rmt_driver_install(RMT_RX_CH, 4096, 0));  // 开 ring buffer
   ESP_ERROR_CHECK(rmt_get_ringbuf_handle(RMT_RX_CH, &rx_rb));
