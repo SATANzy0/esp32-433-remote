@@ -30,7 +30,7 @@ static uint16_t lastN = 0;
 static uint16_t refUs[MAX_ITEMS];
 static uint16_t refLen = 0;
 static uint8_t repeatCount = 0;
-static bool monitor = false;   // 诊断模式: 打印所有通过基础校验的帧(不过滤重复)
+static bool monitor = false;   // 诊断模式: 打印连续重复的帧(自动过滤随机噪声)
 
 void setup() {
   Serial.begin(115200);
@@ -135,14 +135,25 @@ void loop() {
       lastN = toUs(item, n, lastUs);          // 缓存供重放
       if (lastN > 4) {
         if (monitor) {
-          // 诊断模式: 只打印长帧(>=20电平), 跳过短噪声碎片, 看清遥控器真实码
-          if (lastN >= 20) {
-            Serial.print("ALL:[");
-            for (uint16_t i = 0; i < lastN; i++) {
-              Serial.print(lastUs[i]);
-              if (i != lastN - 1) Serial.print(",");
+          // 诊断模式: 只打印连续重复的帧(自动过滤随机噪声)
+          // 噪声每帧都不一样, 真实遥控会连续重复几十次
+          if (lastN >= 16) {
+            if (pulseMatch(lastUs, lastN, refUs, refLen)) {
+              repeatCount++;
+            } else {
+              repeatCount = 1;
+              memcpy(refUs, lastUs, lastN * sizeof(uint16_t));
+              refLen = lastN;
             }
-            Serial.println("]");
+            // 只打印重复 >=2 次的帧, 标注重复次数
+            if (repeatCount >= 2) {
+              Serial.printf("REP[%d]:[", repeatCount);
+              for (uint16_t i = 0; i < lastN; i++) {
+                Serial.print(lastUs[i]);
+                if (i != lastN - 1) Serial.print(",");
+              }
+              Serial.println("]");
+            }
           }
         } else if (isValidFrame(lastUs, lastN)) {
           // 连续3帧逐脉冲一致 => 真实遥控连发, 才打印; 随机噪声不匹配则跳过
@@ -196,7 +207,9 @@ void loop() {
       Serial.println("发射完成, 若 SYN480R 收到会在上面打印 raw");
     } else if (c == 'm') {
       monitor = !monitor;
-      Serial.printf("诊断模式 %s (打印所有基础校验通过的帧)\n", monitor ? "ON" : "OFF");
+      repeatCount = 0;
+      refLen = 0;
+      Serial.printf("诊断模式 %s (只打印连续重复的帧, 自动过滤随机噪声)\n", monitor ? "ON" : "OFF");
     }
   }
 
