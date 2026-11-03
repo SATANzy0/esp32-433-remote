@@ -30,7 +30,13 @@ static uint16_t lastN = 0;
 static uint16_t refUs[MAX_ITEMS];
 static uint16_t refLen = 0;
 static uint8_t repeatCount = 0;
-static bool monitor = false;   // 诊断模式: 打印连续重复的帧(自动过滤随机噪声)
+static bool monitor = false;       // 诊断模式: 只打印连续重复的帧
+static bool prefixMode = false;    // 前导码模式: 打印所有含长脉冲(>2000us)的帧
+static bool statsMode = false;     // 统计模式: 每秒打印统计信息
+static uint32_t frameCount = 0;    // 收到的总帧数
+static uint32_t longPulseCount = 0; // 含长脉冲(>2000us)的帧数
+static uint16_t maxFrameLen = 0;   // 最长帧的电平数
+static uint32_t maxPulseUs = 0;    // 最长脉冲的时长
 
 void setup() {
   Serial.begin(115200);
@@ -134,9 +140,33 @@ void loop() {
       uint16_t n = rx_size / sizeof(rmt_item32_t);
       lastN = toUs(item, n, lastUs);          // 缓存供重放
       if (lastN > 4) {
+        frameCount++;
+        if (lastN > maxFrameLen) maxFrameLen = lastN;
+        
+        // 统计最长脉冲
+        for (uint16_t i = 0; i < lastN; i++) {
+          if (lastUs[i] > maxPulseUs) maxPulseUs = lastUs[i];
+        }
+        
+        // 检查是否含长脉冲(>2000us)
+        bool hasLongPulse = false;
+        for (uint16_t i = 0; i < lastN; i++) {
+          if (lastUs[i] > 2000) { hasLongPulse = true; break; }
+        }
+        if (hasLongPulse) longPulseCount++;
+        
+        // 前导码模式: 打印所有含长脉冲(>2000us)的帧
+        if (prefixMode && hasLongPulse) {
+          Serial.printf("PRE:[", lastN);
+          for (uint16_t i = 0; i < lastN; i++) {
+            Serial.print(lastUs[i]);
+            if (i != lastN - 1) Serial.print(",");
+          }
+          Serial.println("]");
+        }
+        
         if (monitor) {
           // 诊断模式: 只打印连续重复的帧(自动过滤随机噪声)
-          // 噪声每帧都不一样, 真实遥控会连续重复几十次
           if (lastN >= 16) {
             if (pulseMatch(lastUs, lastN, refUs, refLen)) {
               repeatCount++;
@@ -155,7 +185,7 @@ void loop() {
               Serial.println("]");
             }
           }
-        } else if (isValidFrame(lastUs, lastN)) {
+        } else if (!prefixMode && isValidFrame(lastUs, lastN)) {
           // 连续3帧逐脉冲一致 => 真实遥控连发, 才打印; 随机噪声不匹配则跳过
           if (pulseMatch(lastUs, lastN, refUs, refLen)) {
             repeatCount++;
@@ -209,8 +239,26 @@ void loop() {
       monitor = !monitor;
       repeatCount = 0;
       refLen = 0;
-      Serial.printf("诊断模式 %s (只打印连续重复的帧, 自动过滤随机噪声)\n", monitor ? "ON" : "OFF");
+      Serial.printf("诊断模式 %s (只打印连续重复的帧)\n", monitor ? "ON" : "OFF");
+    } else if (c == 'p') {
+      prefixMode = !prefixMode;
+      Serial.printf("前导码模式 %s (打印所有含长脉冲>2000us的帧)\n", prefixMode ? "ON" : "OFF");
+    } else if (c == 's') {
+      statsMode = !statsMode;
+      Serial.printf("统计模式 %s (每秒打印一次)\n", statsMode ? "ON" : "OFF");
     }
+  }
+
+  // 统计模式: 每秒打印一次
+  static uint32_t lastStatsTime = 0;
+  if (statsMode && millis() - lastStatsTime > 1000) {
+    lastStatsTime = millis();
+    Serial.printf("STAT: frames=%d, longPulse=%d, maxFrameLen=%d, maxPulse=%dus\n",
+                  frameCount, longPulseCount, maxFrameLen, maxPulseUs);
+    frameCount = 0;
+    longPulseCount = 0;
+    maxFrameLen = 0;
+    maxPulseUs = 0;
   }
 
   delay(2);
