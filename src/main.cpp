@@ -69,6 +69,8 @@ void setup() {
 
   // ---- WiFi 连接 ----
   Serial.printf("连接 WiFi: %s ...\n", WIFI_SSID);
+  WiFi.mode(WIFI_STA);
+  WiFi.setTxPower(WIFI_POWER_11dBm);  // 降低发射功率, 减少功耗
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
