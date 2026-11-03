@@ -14,7 +14,7 @@
 #include "freertos/ringbuf.h"
 #include <WiFi.h>
 
-#define RX_PIN       16
+#define RX_PIN       15
 #define TX_PIN       17
 #define RMT_RX_CH    RMT_CHANNEL_1
 #define RMT_TX_CH    RMT_CHANNEL_0
@@ -67,18 +67,18 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 
-  // ---- WiFi 连接 ----
-  Serial.printf("连接 WiFi: %s ...\n", WIFI_SSID);
-  WiFi.mode(WIFI_STA);
-  WiFi.setTxPower(WIFI_POWER_11dBm);  // 降低发射功率, 减少功耗
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.printf("\nWiFi 已连接! IP: %s\n", WiFi.localIP().toString().c_str());
-  telnetServer.begin();
-  Serial.printf("Telnet 服务器已启动: %s:23\n", WiFi.localIP().toString().c_str());
+  // ---- WiFi 连接 (暂时禁用, 先抓遥控器码) ----
+  // Serial.printf("连接 WiFi: %s ...\n", WIFI_SSID);
+  // WiFi.mode(WIFI_STA);
+  // WiFi.setTxPower(WIFI_POWER_11dBm);
+  // WiFi.begin(WIFI_SSID, WIFI_PASS);
+  // while (WiFi.status() != WL_CONNECTED) {
+  //   delay(500);
+  //   Serial.print(".");
+  // }
+  // Serial.printf("\nWiFi 已连接! IP: %s\n", WiFi.localIP().toString().c_str());
+  // telnetServer.begin();
+  // Serial.printf("Telnet 服务器已启动: %s:23\n", WiFi.localIP().toString().c_str());
 
   // ---- RMT 接收 (ZX-011) ----
   rmt_config_t rx_cfg = {};
